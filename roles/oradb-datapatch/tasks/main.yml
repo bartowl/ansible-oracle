@@ -1,5 +1,5 @@
 - name: oradb-datapatch | Start listener
-  shell: "export PATH=${ORACLE_HOME}/bin:${PATH}; lsnrctl start {{ lsnrinst.listener_name }} /dev/null; exit 0"
+  shell: "export PATH=${ORACLE_HOME}/bin:${PATH}; lsnrctl start {{ lsnrinst.listener_name }} > /dev/null; exit 0"
   environment: "{{ oracle_env_lsnrctl }}"
   become_user: "{{ oracle_user }}"
   with_items: "{{ listener_installed }}"
