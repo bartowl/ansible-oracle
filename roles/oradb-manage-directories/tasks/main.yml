@@ -1,0 +1,51 @@
+---
+# tasks file for manage-db-users
+- name: Manage directories (cdb)
+  oracle_directory:
+          directory_name={{ item.1.name }}
+          directory_path={{ item.1.path }}
+          directory_mode={{ item.1.mode | default(omit) }}
+          state={{ item.1.state }}
+          hostname={{ ansible_hostname }}
+          port={{ listener_port_template }}
+          service_name={{ db_service_name }}
+          user={{ db_user }}
+          password={{ db_password_cdb}}
+          mode={{ db_mode }}
+  with_subelements:
+      - "{{ oracle_databases }}"
+      - directories
+      - flags:
+        skip_missing: True
+  environment: "{{oracle_env}}"
+  when: oracle_databases is defined and item.0.state|lower == 'present' and item.1 is defined
+  loop_control:
+      label: "port: {{ listener_port_template }}, service: {{ db_service_name }}, directory: {{ item.1.name }}, state: {{ item.1.state }}"
+  run_once: "{{ configure_cluster }}"
+  become_user: "{{ oracle_user }}"
+  tags: directories
+
+- name: Manage directories (pdb)
+  oracle_directory:
+          directory_name={{ item.1.name }}
+          directory_path={{ item.1.path }}
+          directory_mode={{ item.1.mode | default(omit) }}
+          state={{ item.1.state }}
+          hostname={{ ansible_hostname }}
+          port={{ listener_port_template }}
+          service_name={{ item.0.pdb_name }}
+          user={{ db_user }}
+          password={{ db_password_pdb}}
+          mode={{ db_mode }}
+  with_subelements:
+      - "{{ oracle_pdbs }}"
+      - directories
+      - flags:
+        skip_missing: True
+  environment: "{{oracle_env}}"
+  when: oracle_pdbs is defined and item.0 is defined and item.0.state|lower == 'present' and item.1 is defined
+  loop_control:
+      label: "port: {{ listener_port_template }}, service: {{ item.0.pdb_name }}, directory: {{ item.1.name }}, state: {{ item.1.state }}"
+  run_once: "{{ configure_cluster }}"
+  become_user: "{{ oracle_user }}"
+  tags: directories
