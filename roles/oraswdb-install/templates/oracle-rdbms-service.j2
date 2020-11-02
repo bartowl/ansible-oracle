@@ -9,6 +9,7 @@ After=network.target
 
 [Service]
 Type=forking
+TimeoutSec=300
 Restart=no
 ExecStart=/usr/local/bin/manage_oracle_rdbms_procs.sh -a start
 ExecStop=/usr/local/bin/manage_oracle_rdbms_procs.sh -a stop
