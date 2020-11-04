@@ -1,5 +1,5 @@
 ---
-# tasks file for manage-db-users
+# tasks file for manage-db-directories
 - name: Manage directories (cdb)
   oracle_directory:
           directory_name={{ item.1.name }}
