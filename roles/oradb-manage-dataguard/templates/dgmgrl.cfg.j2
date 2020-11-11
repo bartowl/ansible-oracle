@@ -1,0 +1,21 @@
+-- This script is created on all instances in the Data-Guard Environment
+-- Warning: Only use the script on the current Primay Databae!
+
+SET TIME ON
+SET ECHO ON
+
+-- DISABLE CONFIGURATION;
+REMOVE  CONFIGURATION;
+
+CREATE CONFIGURATION {{ item.oracle_db_name }} AS
+  PRIMARY DATABASE IS {{ item.oracle_db_instance_name }}
+  CONNECT IDENTIFIER IS {{ item.oracle_db_instance_name }}_DGMGRL;
+
+ADD DATABASE {{ oracle_sid_primary | mandatory }} AS
+  CONNECT IDENTIFIER IS {{ oracle_sid_primary }}_DGMGRL;
+
+ENABLE CONFIGURATION;
+
+VALIDATE NETWORK CONFIGURATION FOR ALL;
+
+SHOW CONFIGURATION verbose;

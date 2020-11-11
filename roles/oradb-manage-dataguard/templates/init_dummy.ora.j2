@@ -1,0 +1,7 @@
+db_name={{ item.oracle_db_name }}
+db_unique_name={{ oracle_db_unique_name }}
+instance_name={{ oracle_db_instance_name }}
+diagnostic_dest=/oracle/u01/app/oracle/admin/{{ oracle_db_instance_name }}
+audit_file_dest='/oracle/u01/app/oracle/admin/{{ oracle_sid }}/adump'
+sga_target=1500m
+pga_aggregate_target=250m

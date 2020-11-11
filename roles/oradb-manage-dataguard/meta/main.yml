@@ -1,0 +1,4 @@
+---
+dependencies:
+  - { role: meta_ansible_oracle_globals }
+  - { role: meta_hashicorp_vault }
