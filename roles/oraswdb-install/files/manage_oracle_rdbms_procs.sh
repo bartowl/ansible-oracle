@@ -94,6 +94,7 @@ function start_database() {
     ORACLE_HOME=${1}
     ORACLE_SID=${2}
     ORA_STARTMODE=${3}
+    STARTDB="N"
     echo "########################################"
     echo "ORACLE_HOME: "${ORACLE_HOME}
     echo "ORACLE_SID : "${ORACLE_SID}
@@ -124,7 +125,7 @@ function start_database() {
 
     fi
 
-    if [ ${STARTDB:-"N" = "Y" } ] ; then
+    if [ "${STARTDB}" = "Y" ] ; then
 
         # Using RMAN for startup
         # => easy to switch from mount to open for running instance during execution

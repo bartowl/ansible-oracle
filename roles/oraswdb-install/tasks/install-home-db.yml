@@ -51,6 +51,11 @@
 - name: install-home-db | Change Database options with chopt
   shell: |
     set -eu
+    if test $(ls {{ oracle_home_db }}/install/{{ item.state | replace(true, 'enable') | replace(false, 'disable') }}_{{item.option}}*.log | wc -l) -gt 0; then
+      touch {{ oracle_home_db }}/install/chopt_{{item.option}}_{{ item.state }}.state
+      echo "Touch state file only"
+      exit 0
+    fi
     if lsof > /dev/null  2>&1 ; then
       if lsof {{ oracle_home_db }}/bin/oracle > /dev/null 2>&1 ; then
         echo "running Oracle processes found. Aborting chopt!"

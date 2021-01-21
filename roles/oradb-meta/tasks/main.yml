@@ -1,0 +1,56 @@
+- name: (dataguard) collect facts about current status of instances
+  include_tasks: get-db-role-facts.yml
+  with_items:
+      - "{{ oracle_databases }}"
+  loop_control:
+    loop_var: dbh
+  when: oracle_databases is defined and is_dataguard
+
+- name: (dataguard) fail if more than 1 hosts with primary database found
+  vars:
+    primary_host_count: "{% for host in play_hosts %}{% if hostvars[host]['db_role'] is defined and hostvars[host]['db_role'][dbh.oracle_db_name] is defined and hostvars[host]['db_role'][dbh.oracle_db_name]=='primary' %}1{% endif %}{% endfor %}"
+  fail:
+    msg: "more than 1 primary found for {{ dbh.oracle_db_name }} - all failed hosts contain a primary of this DB. Ensure that only one primary exist when dataguard is true"
+  when: primary_host_count | length > 1
+  with_items:
+      - "{{ oracle_databases }}"
+  loop_control:
+    loop_var: dbh
+
+- name: (dataguard) set fact with primary hostname for all hosts in group
+  vars:
+    discovered_primary_host: "{% for host in play_hosts %}{% if hostvars[host]['db_role'] is defined and hostvars[host]['db_role'][dbh.oracle_db_name] is defined and hostvars[host]['db_role'][dbh.oracle_db_name]=='primary' %}{{host}}{% endif %}{% endfor %}"
+    primary_host: "{% if discovered_primary_host | length == 0 %}{{ inventory_hostname }}{% else %}{{ discovered_primary_host }}{% endif %}"
+  set_fact:
+    primary_for_db: "{{ primary_for_db | default({}) | combine({ dbh.oracle_db_name : primary_host }) }}"
+  run_once: true # will run just on first host having the database (to be) instaled and set it for all hosts in the group
+  when: "is_dataguard and 'broken' not in db_status[dbh.oracle_db_name] and 'standby' not in db_role[dbh.oracle_db_name]"
+  with_items:
+      - "{{ oracle_databases }}"
+  loop_control:
+    loop_var: dbh
+
+- name: (non-dataguard) set fact with primary hostname for inventory_hostname on all hosts
+  set_fact:
+    primary_for_db: "{{ primary_for_db | default({}) | combine({ dbh.oracle_db_name : inventory_hostname }) }}"
+  when: not is_dataguard
+  with_items:
+      - "{{ oracle_databases }}"
+  loop_control:
+    loop_var: dbh
+
+- name: (dataguard) print some debug
+  vars:
+    msg: |
+      entire db_role: {{ db_role | default('empty') }}
+      entire db_status: {{ db_status | default('empty') }}
+      entire primary_for_db: {{ primary_for_db | default('empty') }}
+      is_dataguard: {{ is_dataguard }}
+      is_primary: {{ is_primary }}
+  debug:
+    msg: "{{ msg.split('\n') }}"
+    verbosity: 1
+  with_items:
+      - "{{ oracle_databases }}"
+  loop_control:
+    loop_var: dbh

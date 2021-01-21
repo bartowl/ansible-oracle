@@ -1,0 +1,16 @@
+oracle_home: "/home/{{ oracle_user }}"
+oracle_user: "oracle"
+dba_group: "dba"
+primary_host: "{{ primary_for_db[dbh.oracle_db_name] }}"
+primary_oracle_databases: "{{ hostvars[primary_host]['oracle_databases'] | default([]) }}"
+primary_dbh: "{%- for block in primary_oracle_databases -%}
+                {%- if block.oracle_db_name == dbh.oracle_db_name and block.home == dbh.home -%}
+                  {{ block}}
+                {%- endif -%}
+              {%- endfor -%}"
+       
+dbpass_sys: "{% if dbpasswords[dbh.oracle_db_name] is defined and dbpasswords[dbh.oracle_db_name]['sys'] is defined %}{{dbpasswords[dbh.oracle_db_name]['sys']}}{% else %}{{default_dbpass}}{% endif %}"
+dbhome: "{{ db_homes_config[dbh.home]['oracle_home'] }}"
+
+dbpass_sys_primary: "{% if hostvars[primary_host]['dbpasswords'][dbh.oracle_db_name] is defined and hostvars[primary_host]['dbpasswords'][dbh.oracle_db_name]['sys'] is defined %}{{hostvars[primary_host]['dbpasswords'][dbh.oracle_db_name]['sys']}}{% else %}{{default_dbpass}}{% endif %}"
+dbhome_primary: "{{ hostvars[primary_host]['db_homes_config'][primary_dbh.home]['oracle_home'] }}"

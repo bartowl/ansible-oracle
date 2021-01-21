@@ -1,0 +1,7 @@
+db_block: "{{ dbh | default(item.0) | default(item[0]) }}"
+
+oracle_user_home: "/home/{{ oracle_user }}" # Home directory for oracle_user. Needed for passing in ssh-keys, profiles etc
+oracle_profile_name: ".profile_{{ db_block.oracle_db_instance_name | default(db_block.oracle_db_name) }}"       # Name of profile-file. Sets up the environment for that database. One per database
+
+is_dataguard: "{{ db_block is defined and db_block['dataguard'] | default('false') | lower  == 'true' }}"
+is_primary: "{{ not is_dataguard or primary_for_db[db_block.oracle_db_name] | default('') == inventory_hostname }}"

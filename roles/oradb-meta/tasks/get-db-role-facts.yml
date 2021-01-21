@@ -1,0 +1,77 @@
+- name: (dataguard) fail when non-supported options used
+  fail:
+    msg: "Currently only SI (non-RAC) and FS based Databases are supported with dataguard=true"
+  when: "dbh.oracle_db_type != 'SI' or dbh.storage_type != 'FS'"
+# for support of Grid Infrastructure and/or RAC this check should be migrated to own library,
+# as the checking is way more complex there, you cannot rely on /etc/oratab and have to deal with possible
+# primary on multiple nodes, that is still a valid configuration...
+
+- name: (dataguard) check database role
+  shell: |
+    triedstart=0
+    [ -f {{ oracle_user_home }}/{{ oracle_profile_name }} ] && . {{ oracle_user_home }}/{{ oracle_profile_name }}
+    if ! ps -elf | grep -q " ora_pmon_{{ dbh.oracle_db_instance_name | default(dbh.oracle_db_name) }}$" ; then
+      echo "database may exist but be down, let's try to start in mount just to see what's going on and if the db is primary"
+      start_output=$(echo "STARTUP MOUNT" | sqlplus -s / as sysdba 2>&1)
+      echo "$start_output"
+      triedstart=1
+      sleep 5
+    fi
+    if ps -elf | grep -q " ora_pmon_{{ dbh.oracle_db_instance_name | default(dbh.oracle_db_name) }}$" ; then
+      dbrole=$(sqlplus -s / as sysdba <<'EOF'
+    set pages 0
+    select database_role || ',' || open_mode from v$database;
+    EOF
+      )
+      if echo "$dbrole" | grep 'ORA-01507'; then
+        echo "found database in nomount, try to mount and reexecute query"
+        triedstart=1 # to shutdown afterwards, noone needs DB to stay in nomount, especially duplicate task in oradb-manage-dataguard
+        dbrole=$(sqlplus -s / as sysdba <<'EOF'
+    set pages 0
+    ALTER DATABASE MOUNT;
+    select database_role || ',' || open_mode from v$database;
+    EOF
+        )
+      fi
+    fi
+    [ $triedstart == 1 ] && echo "shutdown immediate" | sqlplus -s / as sysdba
+    echo "Database Status:"
+    if [ -z "$ORACLE_HOME" ]; then # handle missing profile
+      echo -n "absent"
+    elif echo "$dbrole" | grep ',READ'; then # READ WRITE or READ ONLY
+      echo -n "OPEN"
+    elif echo "$dbrole" | grep ',MOUNTED'; then
+      echo -n "MOUNT"
+    elif echo "$start_output $dbrole" | grep 'LRM-00109\|ORA-00210'; then # cannot open controlfile and/or (s)pfile - no database found
+      echo -n "absent"
+    else
+      echo -n "broken" # cannot start or mount for other reason, database may be present but broken, do not touch it
+    fi
+    [ -n "$dbrole" ] && [ $triedstart == 1 ] && echo "able" || echo -ne "\n"
+    echo "Database Role:"
+    if echo "$dbrole" | grep -q 'PRIMARY'; then
+      echo "primary"
+    elif echo "$dbrole" | grep -q 'STANDBY'; then
+      echo "standby"
+    else
+      echo "unknown"
+    fi
+  changed_when: false
+  become_user: "{{oracle_user}}"
+  become: yes
+  register: primarycheck
+
+- name: (dataguard) debug output from db role check
+  debug:
+    var: primarycheck.stdout_lines
+    # verbosity: 1
+  when: primarycheck is defined and primarycheck.stdout_lines is defined
+
+- name: (dataguard) set fact for dataguard role
+  vars:
+    role: "{{ primarycheck.stdout_lines[-1] }}"
+    status: "{{ primarycheck.stdout_lines[-3] }}"
+  set_fact:
+    db_role: "{{ db_role | default({}) | combine({ dbh.oracle_db_name : role })}}"
+    db_status: "{{ db_status | default({}) | combine({ dbh.oracle_db_name : status })}}"
+  when: primarycheck is defined and primarycheck.stdout_lines is defined

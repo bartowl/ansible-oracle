@@ -1,2 +1,4 @@
 dependencies:
   - { role: orasw-meta }
+  - { role: oradb-meta }
+

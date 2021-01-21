@@ -5,10 +5,13 @@ DUPLICATE TARGET DATABASE
   FROM ACTIVE DATABASE
   DORECOVER
   SPFILE
-{% if item.init_parameters is defined %}
-{%- for param in item.init_parameters %}
-{% if param.duplicate | default(no) -%}
-  SET {{ param.name }}={% if param.value[0] != "'" %}'{% endif %}{{ param.value }}{% if param.value[-1] != "'" %}'{% endif %}
-{% endif -%}{% endfor %}{%- endif %}
+{% if dbh.init_parameters is defined %}
+{% for param in dbh.init_parameters %}
+{% if param.duplicate | default(false) %}
+    SET {{ param.name }}={% if param.value[0] != "'" %}'{% endif %}{{ param.value }}{% if param.value[-1] != "'" %}'{% endif %}
+
+{% endif %}
+{% endfor %}
+{% endif %}
   NOFILENAMECHECK;
 }

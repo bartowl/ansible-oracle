@@ -1,19 +1,26 @@
 -- This script is created on all instances in the Data-Guard Environment
--- Warning: Only use the script on the current Primay Databae!
+-- Warning: Only use the script on the current Primay Database!
 
 SET TIME ON
 SET ECHO ON
 
 -- DISABLE CONFIGURATION;
-REMOVE  CONFIGURATION;
+-- REMOVE CONFIGURATION;
 
-CREATE CONFIGURATION {{ item.oracle_db_name }} AS
-  PRIMARY DATABASE IS {{ item.oracle_db_instance_name }}
-  CONNECT IDENTIFIER IS {{ item.oracle_db_instance_name }}_DGMGRL;
+CREATE CONFIGURATION {{ dbh.oracle_db_name }} AS
+  PRIMARY DATABASE IS {{ dbh.oracle_db_unique_name }}
+  CONNECT IDENTIFIER IS {{ dbh.oracle_db_unique_name }}_DGMGRL;
 
-ADD DATABASE {{ oracle_sid_primary | mandatory }} AS
-  CONNECT IDENTIFIER IS {{ oracle_sid_primary }}_DGMGRL;
-
+{% for host in ansible_play_hosts_all -%}
+{%- if host != inventory_hostname and hostvars[host]['oracle_databases'] is defined -%}
+{% for database in hostvars[host]['oracle_databases'] %}
+{% if database.oracle_db_name == dbh.oracle_db_name and database.home == dbh.home %}
+ADD DATABASE {{ database.oracle_db_unique_name }} AS
+  CONNECT IDENTIFIER IS {{ database.oracle_db_unique_name }}_DGMGRL;
+{% endif %}
+{% endfor %}
+{%- endif -%}
+{%- endfor %}
 ENABLE CONFIGURATION;
 
 VALIDATE NETWORK CONFIGURATION FOR ALL;

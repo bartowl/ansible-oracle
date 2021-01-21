@@ -1,7 +1,7 @@
-db_name={{ item.oracle_db_name }}
-db_unique_name={{ oracle_db_unique_name }}
-instance_name={{ oracle_db_instance_name }}
-diagnostic_dest=/oracle/u01/app/oracle/admin/{{ oracle_db_instance_name }}
-audit_file_dest='/oracle/u01/app/oracle/admin/{{ oracle_sid }}/adump'
+db_name='{{ dbh.oracle_db_name }}'
+db_unique_name='{{ dbh.oracle_db_unique_name }}'
+instance_name='{{ dbh.oracle_db_instance_name }}'
+diagnostic_dest='{{ dbh.init_parameters | selectattr("name","equalto","diagnostic_dest") | map(attribute="value") | first | default(oracle_base) }}'
+audit_file_dest='{{ dbh.init_parameters | selectattr("name","equalto","audit_file_dest") | map(attribute="value") | first | default(oracle_base + "/admin/" + dbh.oracle_db_unique_name + "/adump") }}'
 sga_target=1500m
 pga_aggregate_target=250m

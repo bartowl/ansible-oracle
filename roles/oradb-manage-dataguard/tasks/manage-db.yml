@@ -1,0 +1,195 @@
+---
+- name: Download Passwordfile from PRIMARY
+  fetch: 
+    src: "{{ dbhome_primary }}/dbs/orapw{{primary_dbh.oracle_db_instance_name}}"
+    dest: "tmp/orapw_{{ dbh.oracle_db_name}}"
+    flat: yes
+  delegate_to: "{{ primary_host }}"
+  run_once: True
+  when: not is_primary
+
+- name: Upload Passwordfile from PRIMARY
+  copy: 
+    src: "tmp/orapw_{{ dbh.oracle_db_name}}"
+    dest: "{{ dbhome }}/dbs/orapw{{ dbh.oracle_db_instance_name }}"
+    mode: '0640'
+    owner: "{{ oracle_user }}"
+    group: "{{ dba_group }}"
+  when: not is_primary
+
+# The dummy file is only used unil a spfile is existing!
+- name: Create dummy init.ora File
+  template:
+    src: init_dummy.ora.j2
+    dest: "{{ dbhome }}/dbs/init{{ dbh.oracle_db_instance_name }}.ora"
+    owner: "{{ oracle_user }}"
+    group: "{{ dba_group }}"
+    force: no # create init.ora when not existing. Do not change an existing file!
+
+- name: ensure scripts directory exists
+  file:
+    path: "{{ oracle_base }}/admin/{{ dbh.oracle_db_unique_name }}/scripts/rman"
+    state: directory
+    owner: "{{ oracle_user }}"
+    group: "{{ dba_group }}"
+
+- name: ensure adump directory exists
+  file:
+    path: '{{ dbh.init_parameters | selectattr("name","equalto","audit_file_dest") | map(attribute="value") | first | default(oracle_base + "/admin/" + dbh.oracle_db_unique_name + "/adump") }}'
+    state: directory
+    owner: "{{ oracle_user }}"
+    group: "{{ dba_group }}"
+
+# create rman template for duplicate here again
+# this is part of oracle_scripts.
+# => Create a duplicat task to update the rman-script!
+- name: Update duplicate.rman-Script from oracle_scripts
+  template:
+    src: rman_duplicate.rman.j2
+    dest: "{{ oracle_base }}/admin/{{ dbh.oracle_db_unique_name }}/scripts/rman/rman_duplicate.rman"
+    owner: "{{ oracle_user }}"
+    group: "{{ dba_group }}"
+  tags: duplicate
+
+- name: Configfile for DGMGRL
+  template:
+    src: dgmgrl.cfg.j2
+    dest: "{{ oracle_base }}/admin/{{ dbh.oracle_db_unique_name }}/scripts/rman/dgmgrl.cfg"
+    owner: "{{ oracle_user }}"
+    group: "{{ dba_group }}"
+  tags: dgmgrl
+
+- name: Duplicate Database
+  shell: |
+    #!/usr/bin/bash
+    set -eu
+    if ps -elf | grep " ora_pmon_{{ dbh.oracle_db_instance_name }}$" ; then
+      echo "Running Instance found"
+      echo "Nothing to do!"
+      exit 0
+    else
+      echo "no running Instance found!"
+      set +u
+      . {{ oracle_home }}/.profile_{{ dbh.oracle_db_name }}
+      set -u
+
+      echo "startup nomount pfile=${ORACLE_HOME}/dbs/init${ORACLE_SID}.ora" | sqlplus -S / as sysdba
+      $ORACLE_HOME/bin/rman << EOF
+    connect target $TARGETCONNECT;
+    connect auxiliary $AUXILIARYCONNECT;
+    @{{ oracle_base }}/admin/{{ dbh.oracle_db_unique_name }}/scripts/rman/rman_duplicate.rman
+    EOF
+    fi
+  environment:
+    TARGETCONNECT: "sys/{{ dbpass_sys_primary }}@{{ primary_dbh.oracle_db_unique_name }}_dgmgrl"
+    AUXILIARYCONNECT: "sys/{{ dbpass_sys_primary }}@{{ dbh.oracle_db_unique_name }}_dgmgrl"
+  become: yes
+  become_user: "{{ oracle_user }}"
+  when: not is_primary
+  changed_when: "standbyctlcmd.stdout is defined and 'Nothing to do' not in standbyctlcmd.stdout"
+  ignore_errors: yes
+  register: duplicatedbcmd
+  tags: duplicatedb
+
+- debug: msg="{{ duplicatedbcmd.stdout_lines }}"
+  when: duplicatedbcmd.stdout_lines is defined
+  tags: duplicatedb
+
+- name: Create Standby Logfiles in Primary & Standby-Databases
+  shell: |
+    #!/usr/bin/bash
+    set -eu
+    if ps -elf | grep -q " ora_pmon_{{ dbh.oracle_db_instance_name }}$" ; then
+      echo "Running Instance found"
+      set +u
+      . {{ oracle_home }}/.profile_{{ dbh.oracle_db_name }}
+      set -u
+
+      ${ORACLE_HOME}/bin/sqlplus -S -L / as sysdba <<_EOF_
+      set serverout on lines 200 pages 100 trimspool on timing on
+      whenever sqlerror exit 1 rollback
+      declare
+        n_logfile_groups  pls_integer;
+        n_max_logsize     pls_integer;
+        n_standby_groups  pls_integer;
+        v_standby_log_dir varchar2(500);
+        v_newlog          varchar2(500);
+
+      begin
+        select max(BYTES) 
+        into n_max_logsize
+        from V\$log;
+
+        select count(group#)
+        into n_logfile_groups
+        from V\$log;
+
+        begin
+          select count(group#) 
+          into n_standby_groups
+          from V\$standby_log;
+        exception
+          when no_data_found then
+            n_standby_groups := 0;
+        end;
+
+        select substr(member, 1, instr(member,'/',-1)) 
+        into v_standby_log_dir
+        from v\$logfile
+        order by member
+        fetch first 1 rows only;
+
+        dbms_output.put_line('found ' || (n_max_logsize/1024) || ' kB maximum size for logfile group.');
+        dbms_output.put_line('found ' || n_logfile_groups || ' logfile groups.');
+        dbms_output.put_line('using ' || v_standby_log_dir || ' for new Standby Logfiles');
+        dbms_output.put_line('found ' || n_standby_groups || ' Standby logfile groups');
+
+        -- Oracle recommends to create +1 more standby Redologs!
+        for lognr in 0 .. (n_logfile_groups - n_standby_groups)
+        loop
+          v_newlog := 'alter database add standby logfile ''' 
+                      || v_standby_log_dir || 'standby_redo'|| lpad((lognr+1),2 , '0') 
+                      || '.log'' size '|| n_max_logsize  ||' reuse';
+          dbms_output.put_line(v_newlog);
+          execute immediate v_newlog;
+
+        end loop;
+
+      end;
+      /
+    _EOF_
+    else
+      echo "no running Instance found!"
+      echo "Nothing to do!"
+      exit 0
+    fi
+  #ignore_errors: yes
+  changed_when: "standbyctlcmd.stdout is defined and 'alter database add standby logfile' in standbyctlcmd.stdout"
+  failed_when: "standbyctlcmd.stdout is defined and 'ORA-' in standbyctlcmd.stdout"
+  become: yes
+  become_user: "{{ oracle_user }}"
+  register: standbyctlcmd
+  tags: standbyctl
+
+- debug: msg="{{ standbyctlcmd.stdout_lines }}"
+  when: standbyctlcmd.stdout_lines is defined
+  tags: standbyctl
+
+- name: dgmgrl show configuration verbose
+  shell: |
+    #!/bin/bash
+    source {{ oracle_home }}/.profile_{{ dbh.oracle_db_name }}
+    set -eu
+    echo -e "show configuration verbose;\n show database verbose {{ dbh.oracle_db_unique_name }};" | dgmgrl /
+  changed_when: False
+  become_user: "{{ oracle_user }}"
+  become: True
+  register: dgmgrlresult
+  tags: dgmgrlstate
+
+- name: show dgmgrl output
+  debug: 
+    msg: "{{ dgmgrlresult.stdout_lines }}"
+    verbosity: 1
+  when: dgmgrlresult.stdout_lines is defined
+  tags: dgmgrlstate

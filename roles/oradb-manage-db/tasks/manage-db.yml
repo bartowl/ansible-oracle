@@ -52,7 +52,7 @@
 - name: manage-db | add dotprofile
   template:
     src: dotprofile-db.j2
-    dest: "/home/{{ oracle_user}}/.profile_{{ dbh.oracle_db_instance_name | default(dbh.oracle_db_name) }}"
+    dest: "{{ oracle_user_home }}/{{oracle_profile_name}}"
     owner: "{{ oracle_user }}"
     group: "{{ oracle_group }}"
     mode: 0660
@@ -107,7 +107,7 @@
         state={{ dbh.state}}
   run_once: "{{ configure_cluster }}"
   become_user: "{{ oracle_user }}"
-  when: dbh.state|lower == 'present'
+  when: "dbh.state|lower == 'present' and is_primary" # run only on primary in case of dataguard
   register: dbca_create
   tags: create_db,manage_db,dbca
 
@@ -119,20 +119,14 @@
 #   run_once: "{{ configure_cluster }}"
 
 - name: manage-db | Customize oratab for autostart
+  vars:
+    startmode: "{% if is_primary %}Y{% else %}M{% endif %}"
   lineinfile:
           dest=/etc/oratab
-          line="{{ dbh.oracle_db_instance_name | default(dbh.oracle_db_name) }}:{{ oracle_home_db }}:Y"
+          line="{{ dbh.oracle_db_instance_name | default(dbh.oracle_db_name) }}:{{ oracle_home_db }}:{{ startmode }}"
+          regexp="^{{ dbh.oracle_db_instance_name | default(dbh.oracle_db_name) }}:{{ oracle_home_db }}:"
           state=present
   when: autostartup_service and not olrloc.stat.exists and dbh.state == 'present'
-  tags: update_oratab
-
-- name: manage-db | Customize oratab for autostart
-  lineinfile:
-         dest=/etc/oratab
-         line="{{ dbh.oracle_db_instance_name | default(dbh.oracle_db_name) }}:{{ oracle_home_db }}:N"
-         state=absent
-  when: autostartup_service and not olrloc.stat.exists and dbh.state == 'present'
-  become: yes
   tags: update_oratab
 
 - debug: msg="Removing DB - {{dbh.oracle_db_name}}, ORACLE_HOME - {{ oracle_home_db }}"
@@ -158,7 +152,7 @@
 
 - name: manage-db | remove dotprofile
   file:
-     path: "/home/{{ oracle_user}}/.profile_{{ dbh.oracle_db_name }}"
+     path: "{{ oracle_user_home }}/{{oracle_profile_name}}"
      state: absent
   when: dbh.state|lower == 'absent'
   tags: create_cdb,dotprofile_db

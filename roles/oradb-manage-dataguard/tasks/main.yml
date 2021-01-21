@@ -1,199 +1,34 @@
----
-- name: Create Passwordfile for Standby
+- include_tasks: manage-db.yml
+  with_items:
+      - "{{ oracle_databases }}"
+  loop_control:
+    loop_var: dbh
+  when: oracle_databases is defined and is_dataguard
+
+- name: Create dgmgrl configuration when not existing (ORA-16532)
   shell: |
     #!/bin/bash
-    source $HOME/oraprofiles/{{ oracle_db_instance_name }}/.profile
+    source {{ oracle_home }}/.profile_{{ dbh.oracle_db_name }}
     set -eu
-    echo "Creating Oracle Passwordfile"
-    orapwd password=${ORACLE_SYSPWD} file="{{ oracle_home }}/dbs/orapw{{oracle_db_instance_name}}"
+    cat <<EOF | dgmgrl
+    connect $DGCONNECT;
+    @"{{ oracle_base }}/admin/{{ dbh.oracle_db_unique_name }}/scripts/rman/dgmgrl.cfg"
+    EOF
   environment:
-      ORACLE_SID: "{{ oracle_db_instance_name }}"
-      ORACLE_SYSPWD: "{{ dbpass_sys }}"
-  args:
-    creates: "{{ oracle_home }}/dbs/orapw{{oracle_db_instance_name}}"
-  with_items: "{{ oracle_databases }}"
-  loop_control:
-    label: "{{ oracle_db_instance_name }}"
-  register: createorapw
-
-- debug: msg="{{ item.stdout_lines }}"
-  with_items: "{{ createorapw.results }}"
-  loop_control:
-    label: ""
-  when: createorapw.results is defined
-
-# The dummy file is only used unil a spfile is existing!
-- name: Create dummy init.ora File
-  template:
-    src: init_dummy.ora.j2
-    dest: "{{ oracle_home }}/dbs/init{{ oracle_db_instance_name }}.ora"
-    force: no # create init.ora when not existing. Do not change an existing file!
-  with_items: "{{ oracle_databases }}"
-  loop_control:
-    label: "{{ oracle_db_instance_name }}"
-
-# create rman template for duplicate here again
-# this is part of oracle_scripts.
-# => Create a duplicat task to update the rman-script!
-- name: Update duplicate.rman-Script from oracle_scripts
-  template:
-    src: rman_duplicate.rman.j2
-    dest: "/oracle/u01/app/oracle/admin/{{ oracle_db_instance_name }}/scripts/rman/rman_duplicate.rman"
-  with_items: "{{ oracle_databases }}"
-  loop_control:
-    label: "{{ oracle_db_instance_name }}"
-  tags: duplicate
-
-- name: Configfile for DGMGRL
-  template:
-    src: dgmgrl.cfg.j2
-    dest: "/oracle/u01/app/oracle/admin/{{ oracle_db_instance_name }}/scripts/rman/dgmgrl.cfg"
-  with_items: "{{ oracle_databases }}"
-  loop_control:
-    label: "{{ oracle_db_instance_name }}"
-  tags: dgmgrl
-
-- name: Duplicate Database
-  shell: |
-    #!/usr/bin/bash
-    set -eu
-    if ps -elf | grep " ora_pmon_{{ oracle_db_instance_name }}$" ; then
-      echo "Running Instance found"
-      echo "Nothing to do!"
-      exit 0
-    else
-      echo "no running Instance found!"
-      set +u
-      . ${HOME}/oraprofiles/{{ oracle_db_instance_name }}/.profile
-      set -u
-
-      echo "startup nomount pfile=${ORACLE_HOME}/dbs/init${ORACLE_SID}.ora" | sqlplus -S / as sysdba
-      {{ oracle_base }}/scripts/rman_wrapper.sh {{ oracle_db_instance_name }} rman_duplicate
-    fi
-  environment:
-    TARGETCONNECT: "sys/{{ dbpass_sys_nonprod }}@{{ oracle_sid_primary }}_dgmgrl"
-    AUXILIARYCONNECT: "sys/{{ dbpass_sys_nonprod }}@{{ oracle_db_instance_name }}_dgmgrl"
-  with_items: "{{ oracle_databases }}"
-  loop_control:
-    label: "{{ oracle_db_instance_name }}"
-  become: yes
-  become_user: oracle
-  # ignore_errors: yes
-  register: duplicatedbcmd
-  tags: duplicatedb
-
-- debug: msg="{{ item.stdout_lines | default("") }}"
+      DGCONNECT: "sys/{{ dbpass_sys }}@{{ dbh.oracle_db_unique_name }}_dgmgrl"
+  become_user: "{{ oracle_user }}"
+  become: True
   with_items:
-    - "{{ duplicatedbcmd.results }}"
+      - "{{ oracle_databases }}"
   loop_control:
-    label: ""
-  when: duplicatedbcmd.results is defined
-  tags: duplicatedb
+    loop_var: dbh
+  when: "is_dataguard and is_primary and 'ORA-16532' in dgmgrlresult.stdout"
+  register: dgmgrlcreateresult
 
-- name: Create Standby Logfiles in Primary & Standby-Databases
-  shell: |
-    #!/usr/bin/bash
-    set -eu
-    if ps -elf | grep " ora_pmon_{{ oracle_db_instance_name }}$" ; then
-      echo "Running Instance found"
-      set +u
-      . ${HOME}/oraprofiles/{{ oracle_db_instance_name }}/.profile
-      set -u
-
-      ${ORACLE_HOME}/bin/sqlplus -S -L / as sysdba <<_EOF_
-      set serverout on lines 200 pages 100 trimspool on timing on
-      whenever sqlerror exit 1 rollback
-      declare
-        n_logfile_groups  pls_integer;
-        n_max_logsize     pls_integer;
-        n_standby_groups  pls_integer;
-        v_standby_log_dir varchar2(500);
-        v_newlog          varchar2(500);
-
-      begin
-        select max(BYTES) 
-        into n_max_logsize
-        from V\$log;
-
-        select count(group#)
-        into n_logfile_groups
-        from V\$log;
-
-        begin
-          select count(group#) 
-          into n_standby_groups
-          from V\$standby_log;
-        exception
-          when no_data_found then
-            n_standby_groups := 0;
-        end;
-
-        select substr(member, 1, instr(member,'/',-1)) 
-        into v_standby_log_dir
-        from v\$logfile
-        order by member
-        fetch first 1 rows only;
-
-        dbms_output.put_line('found ' || (n_max_logsize/1024) || ' kB maximum size for logfile group.');
-        dbms_output.put_line('found ' || n_logfile_groups || ' logfile groups.');
-        dbms_output.put_line('using ' || v_standby_log_dir || ' for new Standby Logfiles');
-        dbms_output.put_line('found ' || n_standby_groups || ' Standby logfile groups');
-
-        -- Oracle recommends to create +1 more standby Redologs!
-        for lognr in 0 .. (n_logfile_groups - n_standby_groups)
-        loop
-          v_newlog := 'alter database add standby logfile ''' 
-                      || v_standby_log_dir || 'standby_redo'|| lpad((lognr+1),2 , '0') 
-                      || '.log'' size '|| n_max_logsize  ||' reuse';
-          dbms_output.put_line(v_newlog);
-          execute immediate v_newlog;
-
-        end loop;
-
-      end;
-      /
-    _EOF_
-    else
-      echo "no running Instance found!"
-      echo "Nothing to do!"
-      exit 0
-    fi
-  environment:
-  with_items: "{{ oracle_databases }}"
+- name: show dgmgrl output
+  debug: msg="{{ item.stdout_lines }}"
+  loop: "{{ dgmgrlcreateresult.results }}"
   loop_control:
-    label: "{{ oracle_db_instance_name }}"
-  ignore_errors: yes
-  become: yes
-  become_user: oracle
-  register: standbyctlcmd
-  tags: standbyctl
-
-- debug: msg="{{ item.stdout_lines | default("") }}"
-  with_items:
-    - "{{ standbyctlcmd.results }}"
-  loop_control:
-    label: ""
-  when: standbyctlcmd.results is defined
-  tags: standbyctl
-
-- name: dgmgrl show configuration verbose
-  shell: |
-    #!/bin/bash
-    source $HOME/oraprofiles/{{ oracle_db_instance_name }}/.profile
-    set -eu
-    echo "show configuration verbose" | dgmgrl /
-  environment:
-      ORACLE_SID: "{{ oracle_db_instance_name }}"
-  with_items: "{{ oracle_databases }}"
-  loop_control:
-    label: "{{ oracle_db_instance_name }}"
-  register: dgmgrlresult
-  tags: dgmgrlstate
-
-- debug: msg="{{ item.stdout_lines | default("") }}"
-  with_items:
-    - "{{ dgmgrlresult.results }}"
-  loop_control:
-    label: ""
-  when: dgmgrlresult.results is defined
+    label: "{{ item.dbh.oracle_db_name }}"
+  when: dgmgrlcreateresult is defined and dgmgrlcreateresult.results is defined
   tags: dgmgrlstate
